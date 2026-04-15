@@ -14,9 +14,9 @@ import { baseSepolia } from "viem/chains";
 import { x402Client, wrapFetchWithPayment } from "@x402/fetch";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { toClientEvmSigner } from "@x402/evm";
-import { config } from "./config.js";
+import { config, agentKey } from "./config.js";
 
-const PRIVATE_KEY = (process.env.PRIVATE_KEY ?? config.privateKey) as `0x${string}`;
+const PRIVATE_KEY = agentKey();
 
 // Step 6: call a live x402 endpoint (the example weather endpoint from x402.org)
 // Override with TARGET_URL env var for step 7 (our own server)

@@ -4,11 +4,13 @@
   "description": "x402 facilitator prototype",
   "type": "module",
   "scripts": {
+    "agent1": "AGENT=1 tsx src/agent.ts",
+    "agent2": "AGENT=2 tsx src/agent.ts",
     "server": "tsx src/server.ts",
-    "agent": "tsx src/agent.ts",
+    "server:coinbase": "tsx src/server.ts",
+    "server:my": "FACILITATOR_URL=http://localhost:4022 tsx src/server.ts",
     "facilitator": "tsx src/facilitator.ts",
-    "server:my-facilitator": "tsx src/server-my-facilitator.ts",
-    "wallet": "tsx src/wallet.ts"
+    "dev": "concurrently -n facilitator,server -c cyan,green \"npm run facilitator\" \"wait-on tcp:4022 && npm run server:my\""
   },
   "keywords": [],
   "author": "",
@@ -16,8 +18,10 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^25.6.0",
+    "concurrently": "^9.2.1",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "wait-on": "^9.0.5"
   },
   "dependencies": {
     "@x402/core": "^2.10.0",
