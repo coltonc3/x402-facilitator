@@ -12,7 +12,7 @@ import { createPublicClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
 import { x402Client, wrapFetchWithPayment } from "@x402/fetch";
-import { ExactEvmScheme } from "@x402/evm/exact/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { toClientEvmSigner } from "@x402/evm";
 import { config } from "./config.js";
 
@@ -75,9 +75,12 @@ if (usdcBalance === 0n) {
   process.exit(1);
 }
 
-// Set up x402 client — EVM exact scheme for all EVM networks (wildcard)
+// Set up x402 client — registers BOTH v1 and v2 EVM exact schemes
 const client = new x402Client();
-client.register("eip155:*", new ExactEvmScheme(signer));
+registerExactEvmScheme(client, {
+  signer,
+  schemeOptions: { rpcUrl: config.rpcUrl },
+});
 
 const fetchWithPayment = wrapFetchWithPayment(fetch, client);
 
