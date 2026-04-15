@@ -99,8 +99,8 @@ const data = await response.json();
 console.log(`\n[agent] SUCCESS — response body:`);
 console.log(JSON.stringify(data, null, 2));
 
-// Decode and log the payment receipt from response headers
-const rawReceipt = response.headers.get("x-payment-response");
+// Decode and log the payment receipt from response headers (header: PAYMENT-RESPONSE)
+const rawReceipt = response.headers.get("payment-response");
 if (rawReceipt) {
   try {
     const receipt = JSON.parse(Buffer.from(rawReceipt, "base64").toString()) as Record<string, unknown>;

@@ -59,8 +59,8 @@ app.get("/health", (_req, res) => {
 
 // Paid endpoint — only reachable once payment is verified and settled
 app.get("/data", (req, res) => {
-  // The x402 middleware injects X-Payment-Response after successful settlement
-  const paymentResp = req.headers["x-payment-response"] as string | undefined;
+  // The x402 middleware injects PAYMENT-RESPONSE header after successful settlement
+  const paymentResp = req.headers["payment-response"] as string | undefined;
   let parsed: unknown = null;
   if (paymentResp) {
     try { parsed = JSON.parse(Buffer.from(paymentResp, "base64").toString()); } catch {}
