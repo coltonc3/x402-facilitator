@@ -100,9 +100,18 @@ function extractPayer(paymentPayload: unknown): string {
   return (p?.payload?.authorization?.from ?? "").toLowerCase();
 }
 
+// Step 14: "fake whitelist" — the facilitator's own address is always allowed,
+// even when whitelist mode is on. This simulates a server granting itself access.
+const FACILITATOR_OWN_ADDRESS = account.address.toLowerCase();
+
 function checkAccess(payer: string): { allowed: boolean; reason?: string } {
   if (BLACKLIST.has(payer)) {
     return { allowed: false, reason: `address ${payer} is blacklisted` };
+  }
+  // Fake whitelist: facilitator's own address is always auto-approved
+  if (payer === FACILITATOR_OWN_ADDRESS) {
+    console.log(`[facilitator] ACL: auto-approved facilitator own address ${payer}`);
+    return { allowed: true };
   }
   if (WHITELIST_ENABLED && WHITELIST.size > 0 && !WHITELIST.has(payer)) {
     return { allowed: false, reason: `address ${payer} is not whitelisted` };
