@@ -40,7 +40,7 @@ app.use(
         accepts: {
           scheme: "exact",
           payTo: config.payToAddress,
-          price: "$0.001",
+          price: "$0.0001",
           network: BASE_SEPOLIA,
         },
         description: "Premium data endpoint (x402 prototype)",

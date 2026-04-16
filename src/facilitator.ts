@@ -45,7 +45,7 @@ if (BLACKLIST.size) console.log(`[facilitator] Blacklist       : ${[...BLACKLIST
 if (WHITELIST.size) console.log(`[facilitator] Whitelist       : ${[...WHITELIST].join(", ")}`);
 
 // ─── Blockchain clients ──────────────────────────────────────────────────────
-const account = privateKeyToAccount(config.privateKey);
+const account = privateKeyToAccount(config.serverPrivateKey);
 
 const publicClient = createPublicClient({
   chain: baseSepolia,

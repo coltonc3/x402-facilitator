@@ -3,6 +3,7 @@ import "dotenv/config";
 export const config = {
   privateKey: process.env.PRIVATE_KEY as `0x${string}`,
   agent2Key: process.env.AGENT2_PRIVATE_KEY as `0x${string}`,
+  serverPrivateKey: process.env.SERVER_PRIVATE_KEY as `0x${string}`,
   rpcUrl: process.env.RPC_URL ?? "https://sepolia.base.org",
   payToAddress: process.env.PAY_TO_ADDRESS as `0x${string}`,
   apiServerPort: parseInt(process.env.API_SERVER_PORT ?? "4021"),

@@ -156,8 +156,9 @@ export WHITELIST=0xADDR1,0xADDR2,0xADDR3
 
 | Name | Address |
 |------|---------|
-| Agent1 / server pay-to | `0xB655E8450EF9D07E5B555CF19B7915329B53dbcA` |
+| Agent1 | `0xB655E8450EF9D07E5B555CF19B7915329B53dbcA` |
 | Agent2 | `0xDD90f58b3A6c7AA2386F620cc2280e9183Bbbf76` |
+| Server (pay-to) | `0xA49CfEE75D6a0c79e7Fca4FeFE3606038f05B10f` |
 
 ## Endpoints
 
