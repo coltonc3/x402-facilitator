@@ -7,12 +7,11 @@
     "agent1": "AGENT=1 tsx src/agent.ts",
     "agent2": "AGENT=2 tsx src/agent.ts",
     "server": "tsx src/server.ts",
-    "server:coinbase": "tsx src/server.ts",
-    "server:my": "FACILITATOR_URL=http://localhost:4022 tsx src/server.ts",
+    "server:coinbase": "FACILITATOR_URL=https://x402.org/facilitator tsx src/server.ts",
     "facilitator": "tsx src/facilitator.ts",
     "facilitator:whitelist": "WHITELIST_ENABLED=true WHITELIST=0xDD90f58b3A6c7AA2386F620cc2280e9183Bbbf76 BLACKLIST=0xB655E8450EF9D07E5B555CF19B7915329B53dbcA tsx src/facilitator.ts",
-    "dev": "concurrently -n facilitator,server -c cyan,green \"npm run facilitator\" \"wait-on tcp:4022 && npm run server:my\"",
-    "dev:whitelist": "concurrently -n facilitator,server -c cyan,green \"npm run facilitator:whitelist\" \"wait-on tcp:4022 && npm run server:my\""
+    "dev": "concurrently -n facilitator,server -c cyan,green \"npm run facilitator\" \"wait-on tcp:4022 && npm run server\"",
+    "dev:whitelist": "concurrently -n facilitator,server -c cyan,green \"npm run facilitator:whitelist\" \"wait-on tcp:4022 && npm run server\""
   },
   "keywords": [],
   "author": "",

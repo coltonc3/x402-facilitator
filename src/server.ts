@@ -9,8 +9,8 @@
  *   5. Return 200 with response
  *
  * FACILITATOR_URL env var switches between facilitators:
- *   default              → https://x402.org/facilitator (Coinbase testnet)
- *   http://localhost:4022 → our custom facilitator
+ *   default                          → http://localhost:4022 (custom facilitator)
+ *   https://x402.org/facilitator     → Coinbase testnet facilitator
  */
 
 import "dotenv/config";
@@ -25,7 +25,7 @@ import {
 import type { PaymentRequired, PaymentRequirements } from "@x402/core/types";
 import { config, BASE_SEPOLIA, USDC_ADDRESS } from "./config.js";
 
-const FACILITATOR_URL = process.env.FACILITATOR_URL ?? config.coinbaseFacilitatorUrl;
+const FACILITATOR_URL = process.env.FACILITATOR_URL ?? `http://localhost:${config.facilitatorPort}`;
 const PORT = config.apiServerPort;
 
 const facilitator = new HTTPFacilitatorClient({ url: FACILITATOR_URL });

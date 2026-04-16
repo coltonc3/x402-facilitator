@@ -61,9 +61,8 @@ Both wallets need ETH (gas) and USDC on Base Sepolia:
 |---------|-------------|
 | `npm run dev` | Start custom facilitator + server together (facilitator first, server waits) |
 | `npm run dev:whitelist` | Same, but with agent2 whitelisted and agent1 blacklisted |
-| `npm run server` | Server only, using Coinbase's testnet facilitator |
-| `npm run server:coinbase` | Same as above (explicit alias) |
-| `npm run server:my` | Server only, using local facilitator on `:4022` |
+| `npm run server` | Server only, using local facilitator on `:4022` (default) |
+| `npm run server:coinbase` | Server only, using Coinbase's testnet facilitator |
 | `npm run facilitator` | Custom facilitator only, no access control |
 | `npm run facilitator:whitelist` | Custom facilitator with agent2 whitelisted, agent1 blacklisted |
 | `npm run agent1` | Agent1 wallet makes a paid request to `TARGET_URL` |
@@ -88,7 +87,7 @@ TARGET_URL=http://localhost:4021/data npm run agent1
 npm run facilitator
 
 # Terminal 2 — server (wait for facilitator to show "Ready" first)
-npm run server:my
+npm run server
 
 # Terminal 3 — agent
 TARGET_URL=http://localhost:4021/data npm run agent1
