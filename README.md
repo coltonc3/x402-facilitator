@@ -22,11 +22,11 @@ agent                    server                  facilitator          blockchain
   | [signs payment auth]   |                         |                    |
   |                        |                         |                    |
   |-- GET /data + sig ---->|                         |                    |
-  |                  POST /verify ----------------->|                    |
-  |                  POST /settle ----------------->|                    |
-  |                                           [submit tx]-------------->|
-  |                                           [wait for receipt] <------|
-  |                  <-- { success, txHash } -------|                    |
+  |                   POST /verify ----------------->|                    |
+  |                   POST /settle ----------------->|                    |
+  |                        |                    [submit tx]-------------->|
+  |                        |                    [wait for receipt] <------|
+  |                   <-- { success, txHash } -------|                    |
   |<-- 200 response -------|                         |                    |
 ```
 
