@@ -59,6 +59,7 @@ Both wallets need ETH (gas) and USDC on Base Sepolia:
 
 | Command | What it does |
 |---------|-------------|
+| `npm run ui` | **Demo dashboard** — all three services in one process, open `http://localhost:4023` |
 | `npm run dev` | Start custom facilitator + server together (facilitator first, server waits) |
 | `npm run dev:whitelist` | Same, but with agent2 whitelisted and agent1 blacklisted |
 | `npm run server` | Server only, using local facilitator on `:4022` (default) |
@@ -67,6 +68,23 @@ Both wallets need ETH (gas) and USDC on Base Sepolia:
 | `npm run facilitator:whitelist` | Custom facilitator with agent2 whitelisted, agent1 blacklisted |
 | `npm run agent1` | Agent1 wallet makes a paid request to `TARGET_URL` |
 | `npm run agent2` | Agent2 wallet makes a paid request to `TARGET_URL` |
+
+## Demo dashboard
+
+The easiest way to see the full flow. Runs server + facilitator + dashboard in one process and streams each step to a three-panel UI in real time.
+
+```bash
+npm run ui
+# open http://localhost:4023
+```
+
+Two buttons:
+- **▶ Run Payment** — happy path. Watch agent sign, server verify+settle, facilitator submit the on-chain tx, agent receive 200.
+- **✗ Run Blocked** — same flow with agent1 blacklisted at the facilitator. Shows the ACL denial propagating back through server to agent.
+
+Wallet balances refresh after each run.
+
+> Note: `npm run ui` starts its own server and facilitator on `:4021` and `:4022`. Stop any existing `npm run dev` or `npm run server` processes first.
 
 ## Running it
 
@@ -157,7 +175,8 @@ export WHITELIST=0xADDR1,0xADDR2,0xADDR3
 |------|---------|
 | Agent1 | `0xB655E8450EF9D07E5B555CF19B7915329B53dbcA` |
 | Agent2 | `0xDD90f58b3A6c7AA2386F620cc2280e9183Bbbf76` |
-| Server (pay-to) | `0xA49CfEE75D6a0c79e7Fca4FeFE3606038f05B10f` |
+| Facilitator (gas) | `0xA49CfEE75D6a0c79e7Fca4FeFE3606038f05B10f` |
+| Server (pay-to) | `0xB22672F7cCb921C0A1C673C204013cad71A89774` |
 
 ## Endpoints
 
