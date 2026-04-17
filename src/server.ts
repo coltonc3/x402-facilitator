@@ -23,7 +23,7 @@ import {
   encodePaymentResponseHeader,
 } from "@x402/core/http";
 import type { PaymentRequired, PaymentRequirements } from "@x402/core/types";
-import { config, BASE_SEPOLIA, USDC_ADDRESS } from "./config.js";
+import { config, BASE_SEPOLIA, USDC_ADDRESS, USDT_ADDRESS, FACILITATOR_ADDRESS } from "./config.js";
 
 const FACILITATOR_URL = process.env.FACILITATOR_URL ?? `http://localhost:${config.facilitatorPort}`;
 const PORT = config.apiServerPort;
@@ -41,6 +41,19 @@ const requirements: PaymentRequirements = {
   maxTimeoutSeconds: 300,
   extra: { name: "USDC", version: "2" },
 };
+
+// Allowance scheme requirements — uses USDT (or USDC fallback on testnet).
+// Agent must have called approve(facilitator) before making a request.
+const allowanceRequirements: PaymentRequirements = {
+  scheme: "allowance",
+  network: BASE_SEPOLIA,
+  asset: USDT_ADDRESS,
+  amount: "100",
+  payTo: config.payToAddress,
+  maxTimeoutSeconds: 300,
+  extra: { facilitatorAddress: FACILITATOR_ADDRESS },
+};
+
 
 console.log(`[server] Starting`);
 console.log(`[server] Pay-to     : ${config.payToAddress}`);
@@ -91,8 +104,9 @@ app.get("/data", async (req, res) => {
   let paymentPayload;
   try {
     paymentPayload = decodePaymentSignatureHeader(sigHeader);
-    const payer = (paymentPayload as { payload?: { authorization?: { from?: string } } })
-      ?.payload?.authorization?.from ?? "unknown";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const p = paymentPayload as any;
+    const payer = p?.payload?.authorization?.from ?? p?.payload?.owner ?? "unknown";
     console.log(`[server] [${requestId}] payment header decoded — payer: ${payer}`);
   } catch (err) {
     console.error(`[server] [${requestId}] failed to decode payment header:`, err);
@@ -171,7 +185,115 @@ app.get("/data", async (req, res) => {
     });
 });
 
+// Allowance endpoint — uses pre-approved transferFrom; no permit needed from agent
+app.get("/data-usdt", async (req, res) => {
+  const requestId = randomUUID().slice(0, 8);
+  const t0 = Date.now();
+
+  console.log(`\n[server] [${requestId}] incoming GET /data-usdt`);
+
+  const sigHeader = (req.headers["payment-signature"] ?? req.headers["x-payment"]) as string | undefined;
+
+  if (!sigHeader) {
+    console.log(`[server] [${requestId}] no payment header → 402`);
+
+    const paymentRequired: PaymentRequired = {
+      x402Version: 2,
+      error: "Payment required",
+      resource: {
+        url: `http://localhost:${PORT}/data-usdt`,
+        description: "Premium data endpoint (USDT, allowance scheme)",
+        mimeType: "application/json",
+      },
+      accepts: [allowanceRequirements],
+    };
+
+    res
+      .status(402)
+      .set("PAYMENT-REQUIRED", encodePaymentRequiredHeader(paymentRequired))
+      .json({});
+    return;
+  }
+
+  let paymentPayload;
+  try {
+    paymentPayload = decodePaymentSignatureHeader(sigHeader);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const payer = (paymentPayload as any)?.payload?.from ?? "unknown";
+    console.log(`[server] [${requestId}] payment header decoded — payer: ${payer}`);
+  } catch (err) {
+    console.error(`[server] [${requestId}] failed to decode payment header:`, err);
+    res.status(400).json({ error: "Invalid payment header" });
+    return;
+  }
+
+  console.log(`[server] [${requestId}] → POST ${FACILITATOR_URL}/verify`);
+  const t1 = Date.now();
+
+  let verified;
+  try {
+    verified = await facilitator.verify(paymentPayload, allowanceRequirements);
+  } catch (err) {
+    console.error(`[server] [${requestId}] facilitator verify threw:`, err);
+    res.status(502).json({ error: "Facilitator unreachable" });
+    return;
+  }
+
+  console.log(`[server] [${requestId}] ← verify ${Date.now() - t1}ms isValid=${verified.isValid}${verified.isValid ? "" : ` reason=${verified.invalidReason}`}`);
+
+  if (!verified.isValid) {
+    res
+      .status(402)
+      .set("PAYMENT-REQUIRED", encodePaymentRequiredHeader({
+        x402Version: 2,
+        error: verified.invalidReason ?? "Payment invalid",
+        resource: { url: `http://localhost:${PORT}/data-usdt` },
+        accepts: [allowanceRequirements],
+      }))
+      .json({});
+    return;
+  }
+
+  console.log(`[server] [${requestId}] → POST ${FACILITATOR_URL}/settle`);
+  const t2 = Date.now();
+
+  let settled;
+  try {
+    settled = await facilitator.settle(paymentPayload, allowanceRequirements);
+  } catch (err) {
+    console.error(`[server] [${requestId}] facilitator settle threw:`, err);
+    res.status(502).json({ error: "Facilitator unreachable" });
+    return;
+  }
+
+  console.log(`[server] [${requestId}] ← settle ${Date.now() - t2}ms success=${settled.success}${settled.success ? ` tx=${settled.transaction}` : ` reason=${settled.errorReason}`}`);
+
+  if (!settled.success) {
+    res.status(402).json({ error: "Settlement failed", reason: settled.errorReason });
+    return;
+  }
+
+  const total = Date.now() - t0;
+  console.log(`[server] [${requestId}] ✓ done — total ${total}ms`);
+
+  res
+    .set("PAYMENT-RESPONSE", encodePaymentResponseHeader(settled))
+    .json({
+      message: "You paid for this! (USDT, allowance scheme)",
+      requestId,
+      timing: { totalMs: total, verifyMs: t2 - t1, settleMs: Date.now() - t2 },
+      payment: {
+        tx: settled.transaction,
+        payer: verified.payer,
+        network: settled.network,
+        amount: "$0.0001 USDT",
+        scheme: "allowance",
+      },
+    });
+});
+
 app.listen(PORT, () => {
   console.log(`\n[server] Ready — http://localhost:${PORT}`);
-  console.log(`[server] Paid endpoint: GET http://localhost:${PORT}/data`);
+  console.log(`[server] Paid endpoint (exact):     GET http://localhost:${PORT}/data`);
+  console.log(`[server] Paid endpoint (allowance): GET http://localhost:${PORT}/data-usdt`);
 });

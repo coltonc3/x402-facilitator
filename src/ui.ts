@@ -29,6 +29,7 @@ import { baseSepolia } from "viem/chains";
 import { x402Facilitator } from "@x402/core/facilitator";
 import { toFacilitatorEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
+import { AllowanceFacilitatorScheme } from "./schemes/allowance.js";
 
 // Server
 import {
@@ -43,8 +44,9 @@ import type { PaymentRequired, PaymentRequirements } from "@x402/core/types";
 import { x402Client, wrapFetchWithPayment } from "@x402/fetch";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { toClientEvmSigner } from "@x402/evm";
+import { registerAllowanceScheme } from "./schemes/allowance.js";
 
-import { config, BASE_SEPOLIA, USDC_ADDRESS } from "./config.js";
+import { config, BASE_SEPOLIA, USDC_ADDRESS, USDT_ADDRESS } from "./config.js";
 
 const FACILITATOR_PORT = config.facilitatorPort;
 const SERVER_PORT = config.apiServerPort;
@@ -68,8 +70,13 @@ function emit(entity: Entity, type: string, message: string) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function extractPayer(paymentPayload: unknown): string {
-  const p = paymentPayload as { payload?: { authorization?: { from?: string } } };
-  return (p?.payload?.authorization?.from ?? "").toLowerCase();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const p = paymentPayload as any;
+  return (
+    p?.payload?.authorization?.from ??  // EIP-3009 exact scheme
+    p?.payload?.from ??                 // allowance scheme
+    ""
+  ).toLowerCase();
 }
 
 function short(addr: string) {
@@ -109,10 +116,26 @@ const facilitatorSigner = toFacilitatorEvmSigner({
 
 facilitatorCore.register(BASE_SEPOLIA, new ExactEvmScheme(facilitatorSigner));
 
+// Allowance scheme — for tokens without EIP-3009 (e.g. USDT)
+const allowanceSigner = {
+  address: facilitatorAccount.address,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readContract:              (args: any) => publicClient.readContract(args as any),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  verifyTypedData:           (args: any) => publicClient.verifyTypedData(args as any),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  writeContract:             (args: any) => walletClient.writeContract(args as any),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  waitForTransactionReceipt: (args: any) => publicClient.waitForTransactionReceipt(args as any),
+};
+facilitatorCore.register(BASE_SEPOLIA, new AllowanceFacilitatorScheme(allowanceSigner));
+
 facilitatorCore.onBeforeVerify(async (ctx) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const scheme = (ctx.paymentPayload as any)?.scheme ?? "exact";
   const payer = extractPayer(ctx.paymentPayload);
   emit("facilitator", "verify-start", `← /verify  payer: ${short(payer)}`);
-  emit("facilitator", "detail", `  checking EIP-3009 signature + USDC balance`);
+  emit("facilitator", "detail", `  scheme: ${scheme}  checking signature + balance`);
 });
 facilitatorCore.onAfterVerify(async (ctx) => {
   if (ctx.result.isValid) {
@@ -122,9 +145,15 @@ facilitatorCore.onAfterVerify(async (ctx) => {
   }
 });
 facilitatorCore.onBeforeSettle(async (ctx) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const scheme = (ctx.paymentPayload as any)?.scheme ?? "exact";
   const payer = extractPayer(ctx.paymentPayload);
   emit("facilitator", "settle-start", `← /settle  from: ${short(payer)}`);
-  emit("facilitator", "detail", `  submitting transferWithAuthorization`);
+  if (scheme === "allowance") {
+    emit("facilitator", "detail", `  transferFrom  (pre-approved allowance)`);
+  } else {
+    emit("facilitator", "detail", `  transferWithAuthorization  (1 tx)`);
+  }
   emit("facilitator", "detail", `  gas wallet: ${short(facilitatorAccount.address)}`);
 });
 facilitatorCore.onAfterSettle(async (ctx) => {
@@ -191,6 +220,16 @@ const requirements: PaymentRequirements = {
   payTo: config.payToAddress,
   maxTimeoutSeconds: 300,
   extra: { name: "USDC", version: "2" },
+};
+
+const allowanceReq: PaymentRequirements = {
+  scheme: "allowance",
+  network: BASE_SEPOLIA,
+  asset: USDT_ADDRESS,
+  amount: "100",
+  payTo: config.payToAddress,
+  maxTimeoutSeconds: 300,
+  extra: { facilitatorAddress: facilitatorAccount.address },
 };
 
 const facilitatorHttpClient = new HTTPFacilitatorClient({
@@ -289,6 +328,98 @@ serverApp.get("/data", async (req, res) => {
   });
 });
 
+serverApp.get("/data-usdt", async (req, res) => {
+  const requestId = randomUUID().slice(0, 8);
+  const sigHeader = (req.headers["payment-signature"] ?? req.headers["x-payment"]) as string | undefined;
+
+  if (!sigHeader) {
+    emit("server", "request", `← GET /data-usdt  [${requestId}]`);
+    emit("server", "detail", `  no PAYMENT-SIGNATURE header`);
+    emit("server", "response-402", `→ 402 PAYMENT-REQUIRED`);
+    emit("server", "detail", `  scheme:allowance  amount:100 ($0.0001 USDT)  payTo:${short(config.payToAddress)}`);
+
+    const paymentRequired: PaymentRequired = {
+      x402Version: 2,
+      error: "Payment required",
+      resource: {
+        url: `http://localhost:${SERVER_PORT}/data-usdt`,
+        description: "Premium data endpoint (USDT, allowance scheme)",
+        mimeType: "application/json",
+      },
+      accepts: [allowanceReq],
+    };
+
+    res.status(402).set("PAYMENT-REQUIRED", encodePaymentRequiredHeader(paymentRequired)).json({});
+    return;
+  }
+
+  emit("server", "request", `← GET /data-usdt + PAYMENT-SIGNATURE  [${requestId}]`);
+
+  let paymentPayload;
+  try {
+    paymentPayload = decodePaymentSignatureHeader(sigHeader);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const payer = (paymentPayload as any)?.payload?.from ?? "unknown";
+    emit("server", "detail", `  payer: ${short(payer)}`);
+  } catch {
+    res.status(400).json({ error: "Invalid payment header" });
+    return;
+  }
+
+  emit("server", "to-facilitator", `→ POST facilitator/verify`);
+
+  let verified;
+  try {
+    verified = await facilitatorHttpClient.verify(paymentPayload, allowanceReq);
+  } catch {
+    res.status(502).json({ error: "Facilitator unreachable" });
+    return;
+  }
+
+  if (!verified.isValid) {
+    emit("server", "verify-fail", `← verify: ✗ ${verified.invalidReason}`);
+    res.status(402).set("PAYMENT-REQUIRED", encodePaymentRequiredHeader({
+      x402Version: 2,
+      error: verified.invalidReason ?? "Payment invalid",
+      resource: { url: `http://localhost:${SERVER_PORT}/data-usdt` },
+      accepts: [allowanceReq],
+    })).json({});
+    return;
+  }
+
+  emit("server", "verify-ok", `← verify: ✓ valid`);
+  emit("server", "to-facilitator", `→ POST facilitator/settle`);
+
+  let settled;
+  try {
+    settled = await facilitatorHttpClient.settle(paymentPayload, allowanceReq);
+  } catch {
+    res.status(502).json({ error: "Facilitator unreachable" });
+    return;
+  }
+
+  if (!settled.success) {
+    emit("server", "settle-fail", `← settle: ✗ ${settled.errorReason}`);
+    res.status(402).json({ error: "Settlement failed" });
+    return;
+  }
+
+  emit("server", "settle-ok", `← settle: ✓ tx: ${(settled.transaction ?? "").slice(0, 14)}…`);
+  emit("server", "response-200", `→ 200 OK + PAYMENT-RESPONSE`);
+
+  res.set("PAYMENT-RESPONSE", encodePaymentResponseHeader(settled)).json({
+    message: "You paid for this! (USDT, allowance scheme)",
+    requestId,
+    payment: {
+      tx: settled.transaction,
+      payer: verified.payer,
+      network: settled.network,
+      amount: "$0.0001 USDT",
+      scheme: "allowance",
+    },
+  });
+});
+
 // ─── Dashboard ─────────────────────────────────────────────────────────────────
 const dashboardApp = express();
 dashboardApp.use(express.json());
@@ -332,7 +463,8 @@ dashboardApp.post("/demo", async (req, res) => {
   if (running) { res.json({ ok: false, error: "Already running" }); return; }
   running = true;
 
-  const blocked = req.query.blocked === "true";
+  const blocked  = req.query.blocked === "true";
+  const useUsdt  = req.query.usdt === "true";
   const agentNum = req.query.agent === "2" ? "2" : "1";
   const agentPrivKey = agentNum === "2" ? config.agent2Key : config.privateKey;
   const agentAccount = privateKeyToAccount(agentPrivKey);
@@ -353,16 +485,56 @@ dashboardApp.post("/demo", async (req, res) => {
   const signer = toClientEvmSigner(agentAccount as any, agentPublicClient as any);
   const client = new x402Client();
   registerExactEvmScheme(client, { signer, schemeOptions: { rpcUrl: config.rpcUrl } });
+  registerAllowanceScheme(client, { signer });
 
+  const endpoint = useUsdt ? "/data-usdt" : "/data";
+
+  // Auto-approve facilitator if running the allowance/USDT demo and allowance is insufficient
+  if (useUsdt) {
+    const ALLOWANCE_ABI = [{
+      name: "allowance", type: "function", stateMutability: "view",
+      inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }],
+      outputs: [{ name: "", type: "uint256" }],
+    }] as const;
+    const APPROVE_ABI = [{
+      name: "approve", type: "function", stateMutability: "nonpayable",
+      inputs: [{ name: "spender", type: "address" }, { name: "value", type: "uint256" }],
+      outputs: [{ name: "", type: "bool" }],
+    }] as const;
+
+    const allowance: bigint = await publicClient.readContract({
+      address: USDT_ADDRESS,
+      abi: ALLOWANCE_ABI,
+      functionName: "allowance",
+      args: [agentAccount.address, facilitatorAccount.address],
+    });
+
+    if (allowance < 100n) {
+      emit("agent", "detail", `  no allowance — approving facilitator first…`);
+      const agentWalletClient = createWalletClient({
+        account: agentAccount,
+        chain: baseSepolia,
+        transport: http(config.rpcUrl),
+      });
+      const hash = await agentWalletClient.writeContract({
+        address: USDT_ADDRESS,
+        abi: APPROVE_ABI,
+        functionName: "approve",
+        args: [facilitatorAccount.address, 2n ** 256n - 1n],
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      emit("agent", "detail", `  ✓ approved facilitator`);
+    }
+  }
   const instrumentedFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const r = new Request(input, init);
     const hasPayment = r.headers.has("payment-signature") || r.headers.has("x-payment");
 
     if (!hasPayment) {
-      emit("agent", "request", `→ GET /data`);
+      emit("agent", "request", `→ GET ${endpoint}`);
       emit("agent", "detail", `  no payment header — expecting 402`);
     } else {
-      emit("agent", "retry", `→ GET /data + PAYMENT-SIGNATURE`);
+      emit("agent", "retry", `→ GET ${endpoint} + PAYMENT-SIGNATURE`);
     }
 
     const response = await fetch(input, init);
@@ -370,9 +542,14 @@ dashboardApp.post("/demo", async (req, res) => {
     if (!hasPayment && response.status === 402) {
       emit("agent", "received-402", `← 402 PAYMENT-REQUIRED`);
       emit("agent", "detail", `  reading payment requirements…`);
-      emit("agent", "signing", `  signing EIP-3009 authorization (off-chain)`);
+      if (useUsdt) {
+        emit("agent", "signing", `  signing allowance payment authorization (off-chain)`);
+        emit("agent", "detail", `  facilitator will call transferFrom`);
+      } else {
+        emit("agent", "signing", `  signing EIP-3009 authorization (off-chain)`);
+        emit("agent", "detail", `  to: ${short(config.payToAddress)}`);
+      }
       emit("agent", "detail", `  from: ${short(agentAccount.address)}`);
-      emit("agent", "detail", `  to:   ${short(config.payToAddress)}`);
       emit("agent", "detail", `  amount: 100 USDC units ($0.0001)`);
     }
 
@@ -383,12 +560,14 @@ dashboardApp.post("/demo", async (req, res) => {
   const fetchWithPayment = wrapFetchWithPayment(instrumentedFetch as any, client);
 
   try {
-    const response = await fetchWithPayment(`http://localhost:${SERVER_PORT}/data`);
+    const response = await fetchWithPayment(`http://localhost:${SERVER_PORT}${endpoint}`);
     if (response.ok) {
-      const data = await response.json() as { payment?: { tx?: string } };
+      const data = await response.json() as { payment?: { tx?: string; scheme?: string } };
       emit("agent", "success", `← 200 OK`);
       emit("agent", "detail", `  tx: ${data.payment?.tx?.slice(0, 20)}…`);
-      emit("agent", "detail", `  paid $0.0001 USDC ✓`);
+      const token = useUsdt ? "USDT" : "USDC";
+      emit("agent", "detail", `  paid $0.0001 ${token} ✓  scheme: ${data.payment?.scheme ?? "exact"}`);
+
       res.json({ ok: true });
     } else {
       emit("agent", "err", `← ${response.status} — payment rejected`);
@@ -432,6 +611,8 @@ button {
 button:hover:not(:disabled) { background: #30363d; }
 button.run  { background: #1a3a26; border-color: #2ea043; color: #3fb950; }
 button.run:hover:not(:disabled) { background: #2ea043; color: #fff; }
+button.usdt { background: #1a2e20; border-color: #2ea043; color: #56d364; }
+button.usdt:hover:not(:disabled) { background: #2ea043; color: #fff; }
 button.blocked { background: #3a1a1a; border-color: #a04040; color: #f85149; }
 button.blocked:hover:not(:disabled) { background: #a04040; color: #fff; }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -508,8 +689,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 <header>
   <h1>x402 Payment Flow</h1>
   <div class="controls">
-    <button class="run"     id="runBtn"     onclick="run(false)">▶ Run Payment</button>
-    <button class="blocked" id="blockedBtn" onclick="run(true)">✗ Run Blocked</button>
+    <button class="run"     id="runBtn"     onclick="run(false, false)">▶ Run Payment</button>
+    <button class="usdt"    id="usdtBtn"    onclick="run(false, true)">$ Run USDT</button>
+    <button class="blocked" id="blockedBtn" onclick="run(true,  false)">✗ Run Blocked</button>
     <button onclick="clearLogs()">Clear</button>
   </div>
 </header>
@@ -518,7 +700,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   <div class="panel agent">
     <div class="panel-head">
       <div class="panel-title">Agent</div>
-      <div class="panel-sub">signs EIP-3009 · never submits txs</div>
+      <div class="panel-sub">signs EIP-3009 / EIP-2612 · never submits txs</div>
     </div>
     <div class="log" id="agent-log"></div>
   </div>
@@ -551,16 +733,24 @@ es.onmessage = e => {
   log.scrollTop = log.scrollHeight;
 };
 
-async function run(blocked) {
+async function run(blocked, usdt = false) {
   const runBtn     = document.getElementById('runBtn');
+  const usdtBtn    = document.getElementById('usdtBtn');
   const blockedBtn = document.getElementById('blockedBtn');
-  runBtn.disabled = true; blockedBtn.disabled = true;
-  runBtn.textContent = '⏳ Running…';
+  [runBtn, usdtBtn, blockedBtn].forEach(b => b.disabled = true);
+  const activeBtn = usdt ? usdtBtn : blocked ? blockedBtn : runBtn;
+  activeBtn.textContent = '⏳ Running…';
+  const params = new URLSearchParams();
+  if (blocked) params.set('blocked', 'true');
+  if (usdt)    params.set('usdt', 'true');
+  const qs = params.toString();
   try {
-    await fetch('/demo' + (blocked ? '?blocked=true' : ''), { method: 'POST' });
+    await fetch('/demo' + (qs ? '?' + qs : ''), { method: 'POST' });
   } finally {
-    runBtn.disabled = false; blockedBtn.disabled = false;
-    runBtn.textContent = '▶ Run Payment';
+    [runBtn, usdtBtn, blockedBtn].forEach(b => b.disabled = false);
+    runBtn.textContent     = '▶ Run Payment';
+    usdtBtn.textContent    = '$ Run USDT';
+    blockedBtn.textContent = '✗ Run Blocked';
     loadBalances();
   }
 }

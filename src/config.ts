@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { privateKeyToAccount } from "viem/accounts";
 
 export const config = {
   privateKey: process.env.PRIVATE_KEY as `0x${string}`,
@@ -17,6 +18,15 @@ export const BASE_SEPOLIA = "eip155:84532" as const;
 
 // USDC on Base Sepolia
 export const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+
+// USDT on Base Sepolia — set USDT_ADDRESS in .env once you have a contract.
+// Falls back to USDC so the allowance scheme can be tested on testnet without real USDT.
+export const USDT_ADDRESS = (process.env.USDT_ADDRESS ?? USDC_ADDRESS) as `0x${string}`;
+
+// Derived from SERVER_PRIVATE_KEY — the address that submits on-chain transactions
+export const FACILITATOR_ADDRESS: `0x${string}` = config.serverPrivateKey
+  ? privateKeyToAccount(config.serverPrivateKey).address
+  : "0x0000000000000000000000000000000000000000";
 
 if (!config.privateKey) {
   throw new Error("PRIVATE_KEY env var is required");

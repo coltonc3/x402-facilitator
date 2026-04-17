@@ -23,6 +23,7 @@ import { baseSepolia } from "viem/chains";
 import { x402Facilitator } from "@x402/core/facilitator";
 import { toFacilitatorEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
+import { AllowanceFacilitatorScheme } from "./schemes/allowance.js";
 import { config, BASE_SEPOLIA } from "./config.js";
 
 const PORT = config.facilitatorPort;
@@ -78,6 +79,21 @@ const facilitatorSigner = toFacilitatorEvmSigner({
 const facilitator = new x402Facilitator();
 facilitator.register(BASE_SEPOLIA, new ExactEvmScheme(facilitatorSigner));
 
+// Allowance scheme — for tokens without EIP-3009 (e.g. USDT)
+// Agent must approve the facilitator once via: npm run approve
+const allowanceSigner = {
+  address: account.address,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readContract:              (args: any) => publicClient.readContract(args as any),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  verifyTypedData:           (args: any) => publicClient.verifyTypedData(args as any),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  writeContract:             (args: any) => walletClient.writeContract(args as any),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  waitForTransactionReceipt: (args: any) => publicClient.waitForTransactionReceipt(args as any),
+};
+facilitator.register(BASE_SEPOLIA, new AllowanceFacilitatorScheme(allowanceSigner));
+
 // Hooks for logging
 facilitator.onBeforeVerify(async (ctx) => {
   const payer = extractPayer(ctx.paymentPayload);
@@ -96,8 +112,13 @@ facilitator.onAfterSettle(async (ctx) => {
 
 // ─── ACL helper ─────────────────────────────────────────────────────────────
 function extractPayer(paymentPayload: unknown): string {
-  const p = paymentPayload as { payload?: { authorization?: { from?: string } } };
-  return (p?.payload?.authorization?.from ?? "").toLowerCase();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const p = paymentPayload as any;
+  return (
+    p?.payload?.authorization?.from ??  // EIP-3009 exact scheme
+    p?.payload?.from ??                 // allowance scheme
+    ""
+  ).toLowerCase();
 }
 
 // Step 14: "fake whitelist" — the facilitator's own address is always allowed,

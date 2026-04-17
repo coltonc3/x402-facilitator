@@ -14,6 +14,7 @@ import { baseSepolia } from "viem/chains";
 import { x402Client, wrapFetchWithPayment } from "@x402/fetch";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { toClientEvmSigner } from "@x402/evm";
+import { registerAllowanceScheme } from "./schemes/allowance.js";
 import { config, agentKey } from "./config.js";
 
 const PRIVATE_KEY = agentKey();
@@ -75,12 +76,14 @@ if (usdcBalance === 0n) {
   process.exit(1);
 }
 
-// Set up x402 client — registers BOTH v1 and v2 EVM exact schemes
+// Set up x402 client — registers exact (EIP-3009) and permit (EIP-2612) schemes
 const client = new x402Client();
 registerExactEvmScheme(client, {
   signer,
   schemeOptions: { rpcUrl: config.rpcUrl },
 });
+// Allowance scheme: works with any ERC-20 after a one-time approve() (e.g. USDT)
+registerAllowanceScheme(client, { signer });
 
 const fetchWithPayment = wrapFetchWithPayment(fetch, client);
 

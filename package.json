@@ -6,6 +6,9 @@
   "scripts": {
     "agent1": "AGENT=1 tsx src/agent.ts",
     "agent2": "AGENT=2 tsx src/agent.ts",
+    "agent1:usdt": "AGENT=1 TARGET_URL=http://localhost:4021/data-usdt tsx src/agent.ts",
+    "agent2:usdt": "AGENT=2 TARGET_URL=http://localhost:4021/data-usdt tsx src/agent.ts",
+    "approve": "tsx src/approve.ts",
     "server": "tsx src/server.ts",
     "server:coinbase": "FACILITATOR_URL=https://x402.org/facilitator tsx src/server.ts",
     "facilitator": "tsx src/facilitator.ts",
