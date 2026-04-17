@@ -700,7 +700,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   <div class="panel agent">
     <div class="panel-head">
       <div class="panel-title">Agent</div>
-      <div class="panel-sub">signs EIP-3009 / EIP-2612 · never submits txs</div>
+      <div class="panel-sub">signs EIP-3009 / allowance auth · never submits txs</div>
     </div>
     <div class="log" id="agent-log"></div>
   </div>
