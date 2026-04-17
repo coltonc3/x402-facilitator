@@ -19,6 +19,15 @@
  *   - Requires one upfront approve() tx (agent needs ETH once)
  *   - Approval persists; agent must manage their own exposure
  *
+ * TODO: Replace this scheme with Uniswap Permit2.
+ * Permit2 is a singleton contract that brings EIP-2612-style signed transfers
+ * to ANY ERC-20 token, including USDT. The agent approves Permit2 once per token
+ * (same upfront ETH cost as this scheme), then uses signed PermitTransferFrom
+ * messages for every subsequent payment — no need for a custom scheme or a custom
+ * facilitator contract. It also provides better nonce handling (bitmap-based,
+ * cheaper than a registry) and expiry built into the protocol.
+ * See: https://blog.uniswap.org/permit2-and-universal-router
+ *
  * REPLAY PROTECTION:
  *   Each signed message contains a random nonce + deadline. The facilitator
  *   tracks used nonces in memory (resets on restart — acceptable for a
