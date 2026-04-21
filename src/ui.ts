@@ -13,7 +13,7 @@
  */
 
 import "dotenv/config";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 import express from "express";
 import {
   createPublicClient,
@@ -21,6 +21,7 @@ import {
   http,
   formatEther,
   formatUnits,
+  parseAbi,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
@@ -45,6 +46,12 @@ import { x402Client, wrapFetchWithPayment } from "@x402/fetch";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { toClientEvmSigner } from "@x402/evm";
 import { registerAllowanceScheme } from "./schemes/allowance.js";
+
+// MPP
+import { createChallengeId, verifyChallengeId } from "./mpp/challenge.js";
+import { buildWwwAuthenticate, parseMppCredential, buildPaymentReceipt } from "./mpp/headers.js";
+import { verifyTempoCharge } from "./mpp/tempo.js";
+import type { MppChallengeParams } from "./mpp/types.js";
 
 import { config, BASE_SEPOLIA, USDC_ADDRESS, USDT_ADDRESS } from "./config.js";
 
@@ -233,6 +240,20 @@ const allowanceReq: PaymentRequirements = {
   extra: { facilitatorAddress: facilitatorAccount.address },
 };
 
+// ─── MPP state ────────────────────────────────────────────────────────────────
+const MPP_SECRET_KEY = randomBytes(32).toString("hex");
+const usedMppChallenges = new Set<string>();
+
+const mppUsdc: MppChallengeParams = {
+  method: "tempo",
+  intent: "charge",
+  amount: "100",
+  currency: USDC_ADDRESS,
+  payTo: config.payToAddress,
+  description: "Premium data endpoint",
+  realm: "x402-facilitator",
+};
+
 const facilitatorHttpClient = new HTTPFacilitatorClient({
   url: `http://localhost:${FACILITATOR_PORT}`,
 });
@@ -243,28 +264,90 @@ serverApp.use(express.json());
 serverApp.get("/data", async (req, res) => {
   const requestId = randomUUID().slice(0, 8);
   const sigHeader = (req.headers["payment-signature"] ?? req.headers["x-payment"]) as string | undefined;
+  const authHeader = req.headers["authorization"] as string | undefined;
+  const mppHeader = authHeader?.startsWith("Payment ") ? authHeader : undefined;
 
-  if (!sigHeader) {
+  // ── No payment header → 402 with both x402 and MPP challenges ──────────────
+  if (!sigHeader && !mppHeader) {
     emit("server", "request", `← GET /data  [${requestId}]`);
-    emit("server", "detail", `  no PAYMENT-SIGNATURE header`);
-    emit("server", "response-402", `→ 402 PAYMENT-REQUIRED`);
+    emit("server", "detail", `  no payment header`);
+    emit("server", "response-402", `→ 402 (x402 + MPP challenge)`);
     emit("server", "detail", `  scheme:exact  amount:100 ($0.0001)  payTo:${short(config.payToAddress)}`);
 
+    const mppChallengeId = createChallengeId(
+      mppUsdc.method, mppUsdc.amount, mppUsdc.currency, mppUsdc.payTo, MPP_SECRET_KEY,
+    );
     const paymentRequired: PaymentRequired = {
       x402Version: 2,
       error: "Payment required",
-      resource: {
-        url: `http://localhost:${SERVER_PORT}/data`,
-        description: "Premium data endpoint",
-        mimeType: "application/json",
-      },
+      resource: { url: `http://localhost:${SERVER_PORT}/data`, description: "Premium data endpoint", mimeType: "application/json" },
       accepts: [requirements],
     };
 
-    res.status(402).set("PAYMENT-REQUIRED", encodePaymentRequiredHeader(paymentRequired)).json({});
+    res.status(402)
+      .set("Cache-Control", "no-store")
+      .set("PAYMENT-REQUIRED", encodePaymentRequiredHeader(paymentRequired))
+      .set("WWW-Authenticate", buildWwwAuthenticate({ ...mppUsdc, id: mppChallengeId }))
+      .json({});
     return;
   }
 
+  // ── MPP path ────────────────────────────────────────────────────────────────
+  if (mppHeader) {
+    emit("server", "request", `← GET /data + Authorization: Payment  [${requestId}]`);
+    emit("server", "detail", `  MPP/tempo credential`);
+
+    const credential = parseMppCredential(mppHeader);
+    if (!credential || credential.method !== "tempo") {
+      res.status(400).json({ error: "invalid MPP credential" });
+      return;
+    }
+
+    const challengeCheck = verifyChallengeId(
+      credential.id,
+      { method: mppUsdc.method, amount: mppUsdc.amount, currency: mppUsdc.currency, payTo: mppUsdc.payTo },
+      MPP_SECRET_KEY,
+    );
+    if (!challengeCheck.valid) {
+      emit("server", "verify-fail", `← MPP challenge invalid: ${challengeCheck.reason}`);
+      res.status(402).set("WWW-Authenticate", `Payment error="${challengeCheck.reason}"`).json({ error: challengeCheck.reason });
+      return;
+    }
+    if (usedMppChallenges.has(challengeCheck.jti)) {
+      emit("server", "verify-fail", `← MPP: challenge already used`);
+      res.status(402).json({ error: "challenge already used" });
+      return;
+    }
+
+    const txHash = (credential.payload.transaction ?? "") as string;
+    emit("server", "to-facilitator", `  verifying on-chain transfer…`);
+
+    const mppResult = await verifyTempoCharge(publicClient, txHash as `0x${string}`, {
+      payTo: mppUsdc.payTo as `0x${string}`,
+      currency: mppUsdc.currency as `0x${string}`,
+      amount: mppUsdc.amount,
+    });
+
+    if (!mppResult.isValid) {
+      emit("server", "verify-fail", `← MPP verify ✗ ${mppResult.invalidReason}`);
+      res.status(402).json({ error: mppResult.invalidReason });
+      return;
+    }
+
+    usedMppChallenges.add(challengeCheck.jti);
+    emit("server", "verify-ok", `← MPP: on-chain transfer confirmed`);
+    emit("server", "detail", `  payer: ${short(mppResult.payer ?? "")}`);
+    emit("server", "response-200", `→ 200 OK + Payment-Receipt`);
+
+    res.set("Payment-Receipt", buildPaymentReceipt(credential.id, "tempo")).json({
+      message: "You paid for this!",
+      requestId,
+      payment: { protocol: "MPP/tempo", payer: mppResult.payer, network: BASE_SEPOLIA, amount: "$0.0001 USDC" },
+    });
+    return;
+  }
+
+  // ── x402 path ───────────────────────────────────────────────────────────────
   emit("server", "request", `← GET /data + PAYMENT-SIGNATURE  [${requestId}]`);
 
   let paymentPayload;
@@ -582,6 +665,110 @@ dashboardApp.post("/demo", async (req, res) => {
   }
 });
 
+// ─── POST /demo-mpp ───────────────────────────────────────────────────────────
+dashboardApp.post("/demo-mpp", async (req, res) => {
+  if (running) { res.json({ ok: false, error: "Already running" }); return; }
+  running = true;
+
+  const agentNum    = req.query.agent === "2" ? "2" : "1";
+  const agentPrivKey = agentNum === "2" ? config.agent2Key : config.privateKey;
+  const agentAccount = privateKeyToAccount(agentPrivKey);
+
+  broadcast({ type: "clear" });
+  emit("server",      "info", `payTo: ${short(config.payToAddress)}`);
+  emit("agent",       "info", `wallet (agent${agentNum}): ${agentAccount.address}`);
+  emit("facilitator", "info", `MPP: no facilitator — server verifies on-chain directly`);
+
+  const agentWalletClient = createWalletClient({
+    account: agentAccount,
+    chain: baseSepolia,
+    transport: http(config.rpcUrl),
+  });
+
+  try {
+    // Step 1: GET /data — expect 402 with MPP challenge
+    emit("agent", "request", `→ GET /data`);
+    emit("agent", "detail",  `  no payment header — expecting 402`);
+
+    const res402 = await fetch(`http://localhost:${SERVER_PORT}/data`);
+    if (res402.status !== 402) {
+      emit("agent", "err", `✗ Expected 402, got ${res402.status}`);
+      res.json({ ok: false });
+      return;
+    }
+
+    emit("agent", "received-402", `← 402 PAYMENT-REQUIRED`);
+
+    const wwwAuth = res402.headers.get("www-authenticate");
+    if (!wwwAuth || !wwwAuth.startsWith("Payment ")) {
+      emit("agent", "err", `✗ No MPP WWW-Authenticate header in 402`);
+      res.json({ ok: false });
+      return;
+    }
+
+    const params: Record<string, string> = {};
+    const re = /(\w+)="([^"]+)"/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(wwwAuth)) !== null) params[m[1]] = m[2];
+    const { id: challengeId, method, amount, currency, recipient } = params;
+
+    emit("agent", "detail", `  challenge: ${(challengeId ?? "").slice(0, 20)}…`);
+    emit("agent", "detail", `  amount: ${amount} ($${(Number(amount) / 1e6).toFixed(4)} USDC) → ${short(recipient ?? "")}`);
+
+    // Step 2: Submit USDC transfer on-chain (agent pays gas)
+    emit("agent", "signing", `  submitting on-chain USDC transfer…`);
+    emit("agent", "detail",  `  agent pays gas — no facilitator needed`);
+
+    const txHash = await agentWalletClient.writeContract({
+      address: currency as `0x${string}`,
+      abi: parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]),
+      functionName: "transfer",
+      args: [recipient as `0x${string}`, BigInt(amount)],
+      gas: 100_000n,
+    });
+
+    emit("agent", "retry",  `  tx: ${txHash.slice(0, 20)}…`);
+    emit("agent", "detail", `  waiting for block confirmation…`);
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+    emit("agent", "detail", `  confirmed block ${receipt.blockNumber}`);
+
+    if (receipt.status !== "success") {
+      emit("agent", "err", `✗ Transaction reverted`);
+      res.json({ ok: false });
+      return;
+    }
+
+    // Step 3: Retry with Authorization: Payment
+    const payloadJson    = JSON.stringify({ intent: "charge", transaction: txHash });
+    const escapedPayload = payloadJson.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const authHeader     = `Payment id="${challengeId}", method="${method}", payload="${escapedPayload}"`;
+
+    emit("agent", "retry",  `→ GET /data + Authorization: Payment`);
+    emit("agent", "detail", `  presenting tx hash to server`);
+
+    const res200 = await fetch(`http://localhost:${SERVER_PORT}/data`, {
+      headers: { Authorization: authHeader },
+    });
+
+    if (res200.ok) {
+      emit("agent", "success", `← 200 OK`);
+      emit("agent", "detail",  `  tx: ${txHash.slice(0, 20)}…`);
+      emit("agent", "detail",  `  paid $0.0001 USDC ✓  protocol: MPP/tempo`);
+      res.json({ ok: true });
+    } else {
+      const errText = await res200.text();
+      emit("agent", "err", `← ${res200.status} — ${errText.slice(0, 80)}`);
+      res.json({ ok: false });
+    }
+  } catch (err) {
+    emit("agent", "err", `✗ ${err instanceof Error ? err.message : String(err)}`);
+    res.json({ ok: false });
+  } finally {
+    running = false;
+  }
+});
+
 dashboardApp.get("/", (_req, res) => res.send(HTML));
 
 // ─── HTML ─────────────────────────────────────────────────────────────────────
@@ -616,6 +803,8 @@ button.usdt { background: #1a2e20; border-color: #2ea043; color: #56d364; }
 button.usdt:hover:not(:disabled) { background: #2ea043; color: #fff; }
 button.blocked { background: #3a1a1a; border-color: #a04040; color: #f85149; }
 button.blocked:hover:not(:disabled) { background: #a04040; color: #fff; }
+button.mpp { background: #0e2a2e; border-color: #0e7490; color: #22d3ee; }
+button.mpp:hover:not(:disabled) { background: #0e7490; color: #fff; }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .balances {
@@ -635,7 +824,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .panel-head { padding: 10px 14px; border-bottom: 1px solid #21262d; flex-shrink: 0; }
 .panel-title { font-size: 13px; font-weight: 700; letter-spacing: .5px; margin-bottom: 2px; }
-.panel-sub   { font-size: 10px; color: #8b949e; }
+.panel-sub   { font-size: 10px; color: #8b949e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .agent       .panel-title { color: #58a6ff; }
 .server      .panel-title { color: #3fb950; }
@@ -690,8 +879,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 <header>
   <h1>x402 Payment Flow</h1>
   <div class="controls">
-    <button class="run"     id="runBtn"     onclick="run(false, false)">▶ Run Payment</button>
-    <button class="usdt"    id="usdtBtn"    onclick="run(false, true)">$ Run USDT</button>
+    <button class="run"     id="runBtn"     onclick="run(false, false)">▶ Pay via x402</button>
+    <button class="mpp"     id="mppBtn"     onclick="runMpp()">⬡ Pay via MPP</button>
+    <button class="usdt"    id="usdtBtn"    onclick="run(false, true)">$ Pay via x402 (USDT)</button>
     <button class="blocked" id="blockedBtn" onclick="run(true,  false)">✗ Run Blocked</button>
     <button onclick="clearLogs()">Clear</button>
   </div>
@@ -701,7 +891,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   <div class="panel agent">
     <div class="panel-head">
       <div class="panel-title">Agent</div>
-      <div class="panel-sub">signs EIP-3009 / allowance auth · never submits txs</div>
+      <div class="panel-sub">signs auth · x402: no agent gas · MPP: agent submits tx</div>
     </div>
     <div class="log" id="agent-log"></div>
   </div>
@@ -738,7 +928,8 @@ async function run(blocked, usdt = false) {
   const runBtn     = document.getElementById('runBtn');
   const usdtBtn    = document.getElementById('usdtBtn');
   const blockedBtn = document.getElementById('blockedBtn');
-  [runBtn, usdtBtn, blockedBtn].forEach(b => b.disabled = true);
+  const mppBtn     = document.getElementById('mppBtn');
+  [runBtn, usdtBtn, blockedBtn, mppBtn].forEach(b => b.disabled = true);
   const activeBtn = usdt ? usdtBtn : blocked ? blockedBtn : runBtn;
   activeBtn.textContent = '⏳ Running…';
   const params = new URLSearchParams();
@@ -748,10 +939,30 @@ async function run(blocked, usdt = false) {
   try {
     await fetch('/demo' + (qs ? '?' + qs : ''), { method: 'POST' });
   } finally {
-    [runBtn, usdtBtn, blockedBtn].forEach(b => b.disabled = false);
-    runBtn.textContent     = '▶ Run Payment';
-    usdtBtn.textContent    = '$ Run USDT';
+    [runBtn, usdtBtn, blockedBtn, mppBtn].forEach(b => b.disabled = false);
+    runBtn.textContent     = '▶ Pay via x402';
+    usdtBtn.textContent    = '$ Pay via x402 (USDT)';
     blockedBtn.textContent = '✗ Run Blocked';
+    mppBtn.textContent     = '⬡ Pay via MPP';
+    loadBalances();
+  }
+}
+
+async function runMpp() {
+  const runBtn     = document.getElementById('runBtn');
+  const usdtBtn    = document.getElementById('usdtBtn');
+  const blockedBtn = document.getElementById('blockedBtn');
+  const mppBtn     = document.getElementById('mppBtn');
+  [runBtn, usdtBtn, blockedBtn, mppBtn].forEach(b => b.disabled = true);
+  mppBtn.textContent = '⏳ Running…';
+  try {
+    await fetch('/demo-mpp', { method: 'POST' });
+  } finally {
+    [runBtn, usdtBtn, blockedBtn, mppBtn].forEach(b => b.disabled = false);
+    runBtn.textContent     = '▶ Pay via x402';
+    usdtBtn.textContent    = '$ Pay via x402 (USDT)';
+    blockedBtn.textContent = '✗ Run Blocked';
+    mppBtn.textContent     = '⬡ Pay via MPP';
     loadBalances();
   }
 }
