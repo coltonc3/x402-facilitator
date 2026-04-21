@@ -271,7 +271,7 @@ serverApp.get("/data", async (req, res) => {
   if (!sigHeader && !mppHeader) {
     emit("server", "request", `← GET /data  [${requestId}]`);
     emit("server", "detail", `  no payment header`);
-    emit("server", "response-402", `→ 402 (x402 + MPP challenge)`);
+    emit("server", "response-402", `← 402 (x402 + MPP challenge)`);
     emit("server", "detail", `  scheme:exact  amount:100 ($0.0001)  payTo:${short(config.payToAddress)}`);
 
     const mppChallengeId = createChallengeId(
@@ -815,22 +815,21 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .bal-name { color: #8b949e; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
 .bal-val  { color: #c9d1d9; }
 
-.grid {
-  display: grid; grid-template-columns: 1fr 1fr 1fr;
-  flex: 1; overflow: hidden;
-}
-.panel { display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid #21262d; }
-.panel:last-child { border-right: none; }
+.grid-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.col-headers  { display: grid; grid-template-columns: 1fr 1fr 1fr; flex-shrink: 0; }
+.col-header   { padding: 10px 14px; border-bottom: 1px solid #21262d; border-right: 1px solid #21262d; }
+.col-header:last-child { border-right: none; }
+.timeline { flex: 1; overflow-y: auto; }
+.trow { display: grid; grid-template-columns: 1fr 1fr 1fr; }
+.tcell { padding: 1px 4px; border-right: 1px solid #21262d; }
+.tcell:last-child { border-right: none; }
 
-.panel-head { padding: 10px 14px; border-bottom: 1px solid #21262d; flex-shrink: 0; }
 .panel-title { font-size: 13px; font-weight: 700; letter-spacing: .5px; margin-bottom: 2px; }
 .panel-sub   { font-size: 10px; color: #8b949e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .agent       .panel-title { color: #58a6ff; }
 .server      .panel-title { color: #3fb950; }
 .facilitator .panel-title { color: #bc8cff; }
-
-.log { flex: 1; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 3px; }
 
 .msg {
   padding: 4px 8px; border-radius: 4px; font-size: 11.5px;
@@ -870,9 +869,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .facilitator .msg.acl-deny    { border-color: #f85149; color: #f85149; font-weight: 600; }
 .facilitator .msg.detail      { border-color: #21262d; color: #8b949e; font-size: 11px; }
 
-.log::-webkit-scrollbar       { width: 4px; }
-.log::-webkit-scrollbar-track { background: transparent; }
-.log::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+.timeline::-webkit-scrollbar       { width: 4px; }
+.timeline::-webkit-scrollbar-track { background: transparent; }
+.timeline::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
 </style>
 </head>
 <body>
@@ -887,41 +886,55 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   </div>
 </header>
 <div class="balances" id="balances">Loading…</div>
-<div class="grid">
-  <div class="panel agent">
-    <div class="panel-head">
+<div class="grid-wrapper">
+  <div class="col-headers">
+    <div class="col-header agent">
       <div class="panel-title">Agent</div>
       <div class="panel-sub">signs auth · x402: no agent gas · MPP: agent submits tx</div>
     </div>
-    <div class="log" id="agent-log"></div>
-  </div>
-  <div class="panel server">
-    <div class="panel-head">
+    <div class="col-header server">
       <div class="panel-title">Server</div>
       <div class="panel-sub">issues 402 · delegates verify + settle</div>
     </div>
-    <div class="log" id="server-log"></div>
-  </div>
-  <div class="panel facilitator">
-    <div class="panel-head">
+    <div class="col-header facilitator">
       <div class="panel-title">Facilitator</div>
       <div class="panel-sub">verifies · submits on-chain tx · pays gas</div>
     </div>
-    <div class="log" id="facilitator-log"></div>
   </div>
+  <div class="timeline" id="timeline"></div>
 </div>
 <script>
 const es = new EventSource('/events');
 es.onmessage = e => {
   const ev = JSON.parse(e.data);
   if (ev.type === 'clear') { clearLogs(); return; }
-  const log = document.getElementById(ev.entity + '-log');
-  if (!log) return;
-  const d = document.createElement('div');
-  d.className = 'msg ' + ev.type;
-  d.innerHTML = '<span class="t">' + ev.t + '</span>' + ev.message;
-  log.appendChild(d);
-  log.scrollTop = log.scrollHeight;
+  const timeline = document.getElementById('timeline');
+  if (!timeline) return;
+
+  // Build row: one cell per column, event in the matching column
+  const row = document.createElement('div');
+  row.className = 'trow';
+  row.dataset.t = ev.t;
+  ['agent', 'server', 'facilitator'].forEach(col => {
+    const cell = document.createElement('div');
+    cell.className = 'tcell ' + col;
+    if (col === ev.entity) {
+      const d = document.createElement('div');
+      d.className = 'msg ' + ev.type;
+      d.innerHTML = '<span class="t">' + ev.t + '</span>' + ev.message;
+      cell.appendChild(d);
+    }
+    row.appendChild(cell);
+  });
+
+  // Insert in chronological order (scan from end — most events arrive in order)
+  const rows = [...timeline.querySelectorAll('.trow')];
+  const after = rows.filter(r => r.dataset.t <= ev.t).pop();
+  if (after) after.insertAdjacentElement('afterend', row);
+  else if (timeline.firstChild) timeline.insertBefore(row, timeline.firstChild);
+  else timeline.appendChild(row);
+
+  timeline.scrollTop = timeline.scrollHeight;
 };
 
 async function run(blocked, usdt = false) {
@@ -968,8 +981,7 @@ async function runMpp() {
 }
 
 function clearLogs() {
-  ['agent','server','facilitator'].forEach(id =>
-    document.getElementById(id + '-log').innerHTML = '');
+  document.getElementById('timeline').innerHTML = '';
 }
 
 async function loadBalances() {
