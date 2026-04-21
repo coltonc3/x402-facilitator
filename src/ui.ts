@@ -87,7 +87,8 @@ function extractPayer(paymentPayload: unknown): string {
 }
 
 function short(addr: string) {
-  return addr.slice(0, 6) + "…" + addr.slice(-4);
+  const a = addr.toLowerCase();
+  return a.slice(0, 6) + "…" + a.slice(-4);
 }
 
 // ─── Blockchain clients ────────────────────────────────────────────────────────
@@ -528,8 +529,8 @@ dashboardApp.get("/balances", async (_req, res) => {
   const wallets = [
     { name: "Agent1", address: "0xB655E8450EF9D07E5B555CF19B7915329B53dbcA" as `0x${string}` },
     { name: "Agent2", address: "0xDD90f58b3A6c7AA2386F620cc2280e9183Bbbf76" as `0x${string}` },
-    { name: "Facilitator", address: facilitatorAccount.address },
     { name: "Server", address: config.payToAddress },
+    { name: "Facilitator", address: facilitatorAccount.address },
   ];
   const results = await Promise.all(wallets.map(async (w) => {
     const [eth, usdc] = await Promise.all([
@@ -561,7 +562,7 @@ dashboardApp.post("/demo", async (req, res) => {
   emit("facilitator", "info", `signer: ${short(facilitatorAccount.address)}`);
   if (blocked) emit("facilitator", "acl-warn", `⚠ blacklist active: ${short(agentAccount.address)}`);
   emit("server", "info", `payTo: ${short(config.payToAddress)}`);
-  emit("agent", "info", `wallet (agent${agentNum}): ${agentAccount.address}`);
+  emit("agent", "info", `wallet (agent${agentNum}): ${agentAccount.address.toLowerCase()}`);
 
   // Build agent client with an instrumented fetch that emits events at each hop
   const agentPublicClient = createPublicClient({ chain: baseSepolia, transport: http(config.rpcUrl) });
@@ -676,7 +677,7 @@ dashboardApp.post("/demo-mpp", async (req, res) => {
 
   broadcast({ type: "clear" });
   emit("server",      "info", `payTo: ${short(config.payToAddress)}`);
-  emit("agent",       "info", `wallet (agent${agentNum}): ${agentAccount.address}`);
+  emit("agent",       "info", `wallet (agent${agentNum}): ${agentAccount.address.toLowerCase()}`);
   emit("facilitator", "info", `MPP: no facilitator — server verifies on-chain directly`);
 
   const agentWalletClient = createWalletClient({
@@ -808,11 +809,14 @@ button.mpp:hover:not(:disabled) { background: #0e7490; color: #fff; }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .balances {
-  display: flex; gap: 24px; padding: 8px 20px;
+  display: grid; grid-template-columns: 1fr 1fr 1fr;
   border-bottom: 1px solid #21262d; font-size: 11px; flex-shrink: 0;
 }
-.bal { display: flex; flex-direction: column; gap: 1px; }
+.bal-group { display: flex; gap: 24px; padding: 8px 14px; border-right: 1px solid #21262d; }
+.bal-group:last-child { border-right: none; }
+.bal { display: flex; flex-direction: column; gap: 2px; }
 .bal-name { color: #8b949e; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+.bal-addr { color: #484f58; font-size: 10px; font-family: inherit; }
 .bal-val  { color: #c9d1d9; }
 
 .grid-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -986,10 +990,21 @@ function clearLogs() {
 
 async function loadBalances() {
   const data = await fetch('/balances').then(r => r.json());
-  document.getElementById('balances').innerHTML = data.map(w =>
-    '<div class="bal"><span class="bal-name">' + w.name + '</span>' +
-    '<span class="bal-val">' + w.usdc + ' USDC · ' + w.eth + ' ETH</span></div>'
-  ).join('');
+  function balCard(w) {
+    const short = w.address.toLowerCase().slice(0, 6) + '…' + w.address.toLowerCase().slice(-4);
+    return '<div class="bal">' +
+      '<span class="bal-name">' + w.name + '</span>' +
+      '<span class="bal-addr">' + short + '</span>' +
+      '<span class="bal-val">' + w.usdc + ' USDC · ' + w.eth + ' ETH</span>' +
+      '</div>';
+  }
+  const agents      = data.filter(w => w.name.startsWith('Agent'));
+  const server      = data.filter(w => w.name === 'Server');
+  const facilitator = data.filter(w => w.name === 'Facilitator');
+  document.getElementById('balances').innerHTML =
+    '<div class="bal-group">' + agents.map(balCard).join('') + '</div>' +
+    '<div class="bal-group">' + server.map(balCard).join('') + '</div>' +
+    '<div class="bal-group">' + facilitator.map(balCard).join('') + '</div>';
 }
 
 loadBalances();
