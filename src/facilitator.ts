@@ -67,9 +67,10 @@ const facilitatorSigner = toFacilitatorEvmSigner({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   verifyTypedData: (args) => publicClient.verifyTypedData(args as any),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  writeContract: (args) => walletClient.writeContract(args as any),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  sendTransaction: (args) => walletClient.sendTransaction(args as any),
+  writeContract: (args: any) => walletClient.writeContract({ gas: 150_000n, ...args } as any),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sendTransaction: (args: any) => walletClient.sendTransaction({ gas: 150_000n, ...args } as any),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   waitForTransactionReceipt: (args) => publicClient.waitForTransactionReceipt(args as any),
   getCode: (args) => publicClient.getCode(args),
@@ -88,7 +89,7 @@ const allowanceSigner = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   verifyTypedData:           (args: any) => publicClient.verifyTypedData(args as any),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  writeContract:             (args: any) => walletClient.writeContract(args as any),
+  writeContract:             (args: any) => walletClient.writeContract({ gas: 150_000n, ...args } as any),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   waitForTransactionReceipt: (args: any) => publicClient.waitForTransactionReceipt(args as any),
 };

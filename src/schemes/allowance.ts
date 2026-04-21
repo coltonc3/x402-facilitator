@@ -278,5 +278,5 @@ export function registerAllowanceScheme(
   }
 ) {
   const scheme = new AllowanceClientScheme(options.signer);
-  client.register((options.network ?? "eip155:84532") as `${string}:${string}`, scheme);
+  client.register((options.network ?? "eip155:*") as `${string}:${string}`, scheme);
 }
