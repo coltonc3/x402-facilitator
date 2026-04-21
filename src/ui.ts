@@ -167,7 +167,7 @@ facilitatorCore.onBeforeSettle(async (ctx) => {
 });
 facilitatorCore.onAfterSettle(async (ctx) => {
   if (ctx.result.success) {
-    emit("facilitator", "ok", `✓ confirmed  tx: ${(ctx.result.transaction ?? "").slice(0, 14)}…`);
+    emit("facilitator", "ok", `✓ confirmed  [tx:${ctx.result.transaction ?? ""}]`);
   } else {
     emit("facilitator", "err", `✗ failed: ${ctx.result.errorReason}`);
   }
@@ -398,7 +398,7 @@ serverApp.get("/data", async (req, res) => {
     return;
   }
 
-  emit("server", "settle-ok", `← settle: ✓ tx: ${(settled.transaction ?? "").slice(0, 14)}…`);
+  emit("server", "settle-ok", `← settle: ✓ [tx:${settled.transaction ?? ""}]`);
   emit("server", "response-200", `→ 200 OK + PAYMENT-RESPONSE`);
 
   res.set("PAYMENT-RESPONSE", encodePaymentResponseHeader(settled)).json({
@@ -489,7 +489,7 @@ serverApp.get("/data-usdt", async (req, res) => {
     return;
   }
 
-  emit("server", "settle-ok", `← settle: ✓ tx: ${(settled.transaction ?? "").slice(0, 14)}…`);
+  emit("server", "settle-ok", `← settle: ✓ [tx:${settled.transaction ?? ""}]`);
   emit("server", "response-200", `→ 200 OK + PAYMENT-RESPONSE`);
 
   res.set("PAYMENT-RESPONSE", encodePaymentResponseHeader(settled)).json({
@@ -728,7 +728,7 @@ dashboardApp.post("/demo-mpp", async (req, res) => {
       gas: 100_000n,
     });
 
-    emit("agent", "retry",  `  tx: ${txHash.slice(0, 20)}…`);
+    emit("agent", "retry",  `  [tx:${txHash}]`);
     emit("agent", "detail", `  waiting for block confirmation…`);
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
@@ -754,7 +754,7 @@ dashboardApp.post("/demo-mpp", async (req, res) => {
 
     if (res200.ok) {
       emit("agent", "success", `← 200 OK`);
-      emit("agent", "detail",  `  tx: ${txHash.slice(0, 20)}…`);
+      emit("agent", "detail",  `  [tx:${txHash}]`);
       emit("agent", "detail",  `  paid $0.0001 USDC ✓  protocol: MPP/tempo`);
       res.json({ ok: true });
     } else {
@@ -840,6 +840,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   line-height: 1.45; border-left: 3px solid #21262d;
 }
 .t { color: #484f58; font-size: 10px; margin-right: 5px; }
+a.tx-link { color: #58a6ff; text-decoration: none; }
+a.tx-link:hover { text-decoration: underline; }
 
 .agent       .msg        { border-color: #1c2d46; }
 .agent       .msg.info   { color: #8b949e; }
@@ -925,7 +927,10 @@ es.onmessage = e => {
     if (col === ev.entity) {
       const d = document.createElement('div');
       d.className = 'msg ' + ev.type;
-      d.innerHTML = '<span class="t">' + ev.t + '</span>' + ev.message;
+      const msg = ev.message.replace(/\\[tx:(0x[0-9a-fA-F]{64})\\]/g, (_, h) =>
+        '<a href="https://sepolia.basescan.org/tx/' + h + '" target="_blank" class="tx-link">' +
+        h.slice(0, 6) + '…' + h.slice(-4) + '</a>');
+      d.innerHTML = '<span class="t">' + ev.t + '</span>' + msg;
       cell.appendChild(d);
     }
     row.appendChild(cell);
